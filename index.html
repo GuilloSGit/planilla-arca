@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="es-AR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Planilla ARCA</title>
+  <meta name="description" content="Convierte los PDF de Mis Facilidades (ARCA) en una planilla Excel. Todo se procesa en tu navegador.">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="top">
+    <div>
+      <h1>Planilla ARCA</h1>
+      <p class="sub">PDF de «Mis Facilidades» → planilla Excel. Todo se procesa en este navegador: no se sube nada a ningún servidor.</p>
+    </div>
+    <div class="acciones">
+      <button id="btn-exportar" class="primario" disabled>Exportar Excel</button>
+    </div>
+  </header>
+
+  <main>
+    <section id="carga" class="panel">
+      <div id="zona" class="zona" tabindex="0" role="button" aria-label="Elegir o arrastrar PDF o ZIP">
+        <strong>Arrastrá acá los PDF (o un .zip con ellos)</strong>
+        <span>o hacé clic para elegirlos · hasta unos 80 archivos</span>
+        <input id="entrada" type="file" accept=".pdf,.zip,application/pdf,application/zip" multiple hidden>
+      </div>
+      <p class="nota">El OCR de ~80 PDF puede tardar varios minutos. Dejá la pestaña abierta. La primera vez se descarga el motor de OCR (~10 MB, queda en este sitio).</p>
+      <div id="progreso" hidden>
+        <div class="barra"><div id="barra-int"></div></div>
+        <p id="progreso-txt"></p>
+        <ul id="lista-archivos" class="archivos"></ul>
+      </div>
+    </section>
+
+    <section id="revision" class="panel" hidden>
+      <div class="cabecera-rev">
+        <h2>Revisión por plan</h2>
+        <label class="chk"><input type="checkbox" id="solo-criticas"> Solo planes con alertas críticas</label>
+        <span id="resumen-global" class="resumen-global"></span>
+      </div>
+      <div class="tabla-scroll">
+        <table id="tabla-planes" class="tabla">
+          <thead>
+            <tr>
+              <th>Plan</th><th>Estado</th><th class="n">Cuotas</th><th class="n">Pagas</th><th class="n">Pendientes</th>
+              <th class="n">Total pagado</th><th class="n">Pie del reporte</th><th class="n">Diferencia</th>
+              <th class="n">Pendiente</th><th>Alertas</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <div id="detalle" class="detalle" hidden></div>
+
+      <div class="guardado">
+        <h3>Guardar en este navegador (opcional)</h3>
+        <p class="nota">Por defecto todo queda solo en memoria y se pierde al cerrar la pestaña. Si querés, podés guardar el resultado en IndexedDB de este navegador.</p>
+        <button id="btn-guardar">Guardar resultados</button>
+        <button id="btn-cargar">Cargar guardado</button>
+        <button id="btn-borrar">Borrar guardado</button>
+        <span id="guardado-estado" class="nota"></span>
+      </div>
+    </section>
+  </main>
+
+  <footer class="pie">
+    <p>Sin IA: el OCR es tesseract.js y el resto son reglas fijas. Todo número debe contrastarse con el PDF.</p>
+  </footer>
+
+  <script src="vendor/pdf.min.js"></script>
+  <script src="vendor/tesseract.min.js"></script>
+  <script src="vendor/jszip.min.js"></script>
+  <script src="vendor/exceljs.min.js"></script>
+  <script type="module" src="app.js"></script>
+</body>
+</html>
