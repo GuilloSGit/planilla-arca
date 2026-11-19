@@ -8,3 +8,6 @@ tests/local/
 
 # configuración local de Claude Code (permisos personales)
 .claude/settings.local.json
+
+# excepción: la guía de uso (contenido sintético, sin datos reales)
+!docs/Planilla-ARCA-guia.pdf
