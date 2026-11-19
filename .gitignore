@@ -5,3 +5,6 @@ node_modules/
 .DS_Store
 # datos reales de prueba (nunca al repo)
 tests/local/
+
+# configuración local de Claude Code (permisos personales)
+.claude/settings.local.json
