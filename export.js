@@ -7,6 +7,7 @@ const NUM = '#,##0.00;(#,##0.00)';
 const FECHA = 'dd/mm/yyyy';
 const AMARILLO = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFF200' } };
 const ROJO = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF8C9C9' } };
+const CELESTE = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFBDD7EE' } }; // corregido a mano
 const GRIS = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE7E6E6' } };
 
 const dt = (iso) => (iso ? new Date(iso + 'T00:00:00Z') : null);
@@ -73,6 +74,11 @@ export async function generarXlsx(ExcelJS, planes) {
       marcar(4, rv.capital || c.capital == null); marcar(5, rv.financiero || c.financiero == null);
       marcar(7, rv.vencPago || (pag && !c.vencPago)); marcar(10, rv.resPagado || (pag && c.resPagado == null));
       marcar(14, rv.resPendiente); marcar(8, false);
+      // celeste = corregido a mano (tiene prioridad sobre el amarillo)
+      const mn = c.manual || {}; const fm = c.filaPago?.manual || {};
+      if (mn.capital) r.getCell(4).fill = CELESTE; if (mn.financiero) r.getCell(5).fill = CELESTE;
+      if (fm.venc) r.getCell(7).fill = CELESTE; if (fm.resarcitorio) r.getCell(10).fill = CELESTE;
+      if (c.estadoManual !== undefined) r.getCell(6).fill = CELESTE;
       r.eachCell({ includeEmpty: true }, (cell) => { cell.font = FUENTE; });
       f++;
     }
@@ -138,7 +144,9 @@ export async function generarXlsx(ExcelJS, planes) {
       const pie = p.pie && !p.pie.incompleto ? p.pie : null;
       if (p.pie) {
         set('pieCap', n(p.pie.capital)); set('pieFin', n(p.pie.financiero)); set('pieRes', n(p.pie.resarcitorio)); set('pieTot', n(p.pie.total));
-        if (p.pie.baja) for (const k of ['pieCap', 'pieFin', 'pieRes', 'pieTot']) r.getCell(K[k].i).fill = AMARILLO;
+        for (const [k, kk] of [['pieCap', 'capital'], ['pieFin', 'financiero'], ['pieRes', 'resarcitorio'], ['pieTot', 'total']]) {
+          if (p.pie.manual?.[kk]) r.getCell(K[k].i).fill = CELESTE; else if (p.pie.revisar?.[kk] ?? p.pie.baja) r.getCell(K[k].i).fill = AMARILLO;
+        }
       }
       if (pie) {
         const d = s.diferencia; const ok = !d.capital && !d.financiero && !d.resarcitorio && !d.total;
@@ -211,7 +219,7 @@ export async function generarXlsx(ExcelJS, planes) {
   wsN.getCell('A3').font = { ...FUENTE, bold: true };
   nota('Supuestos', undefined, undefined, { ...FUENTE, bold: true });
   for (const t of [
-    'Los datos salen de un OCR sobre los PDF de ARCA: todo número debe contrastarse con el PDF. Las celdas amarillas son las que el OCR leyó con baja confianza o no pudo leer.',
+    'Los datos salen de un OCR sobre los PDF de ARCA: todo número debe contrastarse con el PDF. Las celdas amarillas son las que el OCR leyó con baja confianza o no pudo leer. Las celestes fueron corregidas a mano (ver abajo).',
     'Cuota paga: tiene una fila con «Pago» o figura como «Cuota Cancelada». «Fecha vto. con la que se pagó» es el vencimiento aplicado al pago, NO la fecha real de pago.',
     'Resarcitorio pagado: el de la fila marcada «Pago». Total pagado = Capital + Interés financiero + Resarcitorio pagado.',
     'Cuota impaga: Capital + Financiero + resarcitorio del último vencimiento con fecha ≤ cierre del ejercicio que figure para esa cuota (0 si no hay ninguno).',
@@ -227,6 +235,13 @@ export async function generarXlsx(ExcelJS, planes) {
   for (const p of planes) for (const a of p.alertas) {
     nota(p.numero, a.nivel === 'critica' ? 'CRÍTICA' : 'Aviso', a.texto, FUENTE);
     if (a.nivel === 'critica') wsN.getCell(k - 1, 2).fill = ROJO;
+  }
+  const conCorr = planes.filter((p) => p.correcciones?.length);
+  if (conCorr.length) {
+    k++;
+    nota('Correcciones manuales (estos valores NO vienen del PDF: celdas celestes)', undefined, undefined, { ...FUENTE, bold: true });
+    nota('Plan', '', 'Dato: valor leído por el OCR → valor corregido', { ...FUENTE, bold: true });
+    for (const p of conCorr) for (const x of p.correcciones) nota(p.numero, '', `${x.etiqueta}: ${x.textoOriginal} → ${x.textoActual}`, FUENTE);
   }
   wsN.getColumn(1).width = 28; wsN.getColumn(2).width = 14; wsN.getColumn(3).width = 120;
   for (const c of ['A4', 'A5', 'B4', 'B5']) wsN.getCell(c).font = FUENTE;

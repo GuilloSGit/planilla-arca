@@ -12,6 +12,7 @@ Convierte los PDF descargados de **Mis Facilidades (ARCA)** en una planilla Exce
 2. Arrastrá los PDF (o un `.zip` con ellos). El OCR de ~80 PDF tarda varios minutos: dejá la pestaña abierta.
 3. Revisá cada plan en la tabla. Clic en un plan para ver sus cuotas fila por fila, con la fila «Pago» marcada.
    - **Rojo**: diferencias y totales que no cierran. **Amarillo**: celdas que el OCR leyó con baja confianza o no pudo leer → contrastar con el PDF.
+   - **Corregí a mano** lo que el OCR leyó mal: capital, financiero, resarcitorio, total, fecha de vencimiento, el pie del reporte, qué fila es la de «Pago» y el estado de la cuota. Se escribe en la celda (formato `1.234,56`). Las alertas se recalculan y **no se ocultan** si lo que escribís no cierra. Lo corregido queda en **celeste**, listado abajo («Restaurar lo leído» deshace la corrección) y en la hoja «Notas» del Excel con el valor original del OCR.
    - Completá **Fecha de pago real** de cada cuota paga (los PDF solo informan el vencimiento con el que se aplicó el pago).
 4. **Exportar Excel.** Si hay planes con alertas críticas pide confirmación; las alertas quedan en la hoja «Notas».
 5. Opcional: «Guardar resultados» los deja en IndexedDB de ese navegador. Por defecto todo queda en memoria.
@@ -49,7 +50,7 @@ Para probar local hay que servirlo por HTTP (los módulos ES no cargan desde `fi
 
 ```bash
 npm install
-npm test                      # tests del parser y del export (fixtures sintéticos)
+npm test                      # tests del parser, las correcciones y el export (fixtures sintéticos)
 npm run vendor                # recopia las librerías a /vendor
 node tools/ocr-folder.mjs <carpeta-con-pdf>      # OCR en Node → tests/local/ocr (ignorado por git)
 node tools/verificar.mjs                          # totales vs valores de referencia
@@ -66,5 +67,6 @@ node tools/exportar-local.mjs salida.xlsx && node tools/recalcular.mjs salida.xl
 
 ## Límites conocidos
 
-- El OCR puede equivocarse: por eso están los controles contra el pie y las celdas amarillas. Los importes mal leídos todavía no se pueden corregir desde la pantalla (solo la fecha de pago real).
+- El OCR puede equivocarse: por eso están los controles contra el pie, las celdas amarillas y la corrección manual. Si el OCR salta un número o parte un importe de forma que cambia la cantidad de columnas de una fila, la fila se marca con alerta crítica (no se adivina).
+- No se puede agregar ni borrar filas o cuotas a mano, solo corregir lo leído.
 - Se usa ExcelJS y no SheetJS para exportar, porque SheetJS Community no escribe estilos (Arial, celdas amarillas).

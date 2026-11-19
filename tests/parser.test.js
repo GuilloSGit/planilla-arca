@@ -31,7 +31,7 @@ test('Total pagado = capital + financiero + resarcitorio de la fila de pago', ()
 
 test('pie coherente: sin diferencia y sin alertas críticas', () => {
   const r = R();
-  assert.deepEqual(r.pie, { capital: 81000000, financiero: 19000000, resarcitorio: 6250000, total: 106250000, baja: false });
+  assert.deepEqual({ ...r.pie }, { ...r.pie, capital: 81000000, financiero: 19000000, resarcitorio: 6250000, total: 106250000, baja: false, incompleto: false });
   const d = diferenciaConPie(r.cuotas, r.pie);
   assert.deepEqual(d, { capital: 0, financiero: 0, resarcitorio: 0, total: 0 });
   assert.equal(r.alertas.filter((a) => a.nivel === 'critica').length, 0);

@@ -1,6 +1,6 @@
 // app.js — interfaz: carga de archivos, OCR en el navegador, revisión y exportación.
 import { ocrPagina } from './ocr.js';
-import { parseReporte, consolidar, resumenPlan, fmtMonto, fmtFecha, clasificarEjercicio, analizarNombre } from './parser.js';
+import { parseReporte, consolidar, resumenPlan, fmtMonto, fmtFecha, clasificarEjercicio, corregirCampo, leerMontoUsuario } from './parser.js';
 import { generarXlsx } from './export.js';
 
 const $ = (s) => document.querySelector(s);
@@ -138,7 +138,14 @@ function dibujar() {
   dibujarDetalle();
 }
 
-function celda(valor, rev, cls = 'n') { return `<td class="${cls}${rev ? ' rev' : ''}">${valor}</td>`; }
+// Celda con importe editable. rev = dudoso del OCR (amarillo); man = corregido a mano (celeste).
+function celdaMonto(valor, { rev, man, campo, cuota, fila, solo }) {
+  const cls = `n${man ? ' man' : rev ? ' rev' : ''}`;
+  if (solo) return `<td class="${cls}">${valor == null ? '?' : fmtMonto(valor)}</td>`;
+  return `<td class="${cls}"><input class="ed" type="text" inputmode="decimal" placeholder="?" value="${valor == null ? '' : esc(fmtMonto(valor))}"
+    data-campo="${campo}" ${cuota != null ? `data-cuota="${cuota}"` : ''} ${fila != null ? `data-fila="${fila}"` : ''} aria-label="${esc(campo)}"></td>`;
+}
+const cel = (valor, rev) => `<td class="n${rev ? ' rev' : ''}">${valor}</td>`;
 
 function dibujarDetalle() {
   const cont = $('#detalle');
@@ -154,33 +161,77 @@ function dibujarDetalle() {
     cont.innerHTML = html; return;
   }
   const s = resumenPlan(p);
-  if (p.pie) {
-    const d = s.diferencia;
-    html += `<div class="tabla-scroll"><table class="tabla"><thead><tr><th></th><th class="n">Capital</th><th class="n">Financiero</th><th class="n">Resarcitorio</th><th class="n">Total</th></tr></thead><tbody>
-      <tr><td>Suma de cuotas pagas</td><td class="n">${fmtMonto(s.pagado.capital)}</td><td class="n">${fmtMonto(s.pagado.financiero)}</td><td class="n">${fmtMonto(s.pagado.resarcitorio)}</td><td class="n">${fmtMonto(s.pagado.total)}</td></tr>
-      <tr><td>Pie del reporte</td>${['capital', 'financiero', 'resarcitorio', 'total'].map((k) => celda(p.pie[k] != null ? fmtMonto(p.pie[k]) : '?', p.pie.baja || p.pie[k] == null)).join('')}</tr>
-      <tr><td>Diferencia</td>${d ? ['capital', 'financiero', 'resarcitorio', 'total'].map((k) => `<td class="n ${d[k] ? 'rojo' : ''}">${fmtMonto(d[k])}</td>`).join('') : '<td colspan="4">no calculable</td>'}</tr></tbody></table></div>`;
-  }
+  const pie = p.pie || { revisar: { capital: true, financiero: true, resarcitorio: true, total: true }, manual: {} };
+  const d = s.diferencia;
+  html += `<p class="nota">Podés escribir en las celdas para corregir lo que leyó el OCR (formato 1.234,56). <span class="bad av">amarillo</span> = dudoso del OCR, <span class="bad man">celeste</span> = corregido a mano. Las alertas se recalculan y <b>no</b> se ocultan si lo que escribís no cierra.</p>
+    <div class="tabla-scroll"><table class="tabla"><thead><tr><th></th><th class="n">Capital</th><th class="n">Financiero</th><th class="n">Resarcitorio</th><th class="n">Total</th></tr></thead><tbody>
+    <tr><td>Suma de cuotas pagas</td><td class="n">${fmtMonto(s.pagado.capital)}</td><td class="n">${fmtMonto(s.pagado.financiero)}</td><td class="n">${fmtMonto(s.pagado.resarcitorio)}</td><td class="n">${fmtMonto(s.pagado.total)}</td></tr>
+    <tr><td>Pie del reporte</td>${['capital', 'financiero', 'resarcitorio', 'total'].map((k) => celdaMonto(p.pie ? p.pie[k] : null, { rev: pie.revisar?.[k], man: pie.manual?.[k], campo: `pie:${k}` })).join('')}</tr>
+    <tr><td>Diferencia</td>${d ? ['capital', 'financiero', 'resarcitorio', 'total'].map((k) => `<td class="n ${d[k] ? 'rojo' : ''}">${fmtMonto(d[k])}</td>`).join('') : '<td colspan="4">no calculable (falta leer el pie)</td>'}</tr></tbody></table></div>`;
   html += `<div class="tabla-scroll"><table class="tabla"><thead><tr><th>Cuota / vencimiento</th><th class="n">Capital</th><th class="n">Financiero</th><th class="n">Resarcitorio</th><th class="n">Total</th><th>Estado</th><th>Ejercicio</th><th>Fecha de pago real</th></tr></thead><tbody>`;
   for (const c of p.cuotas) {
-    const rv = c.revisar || {};
-    html += `<tr class="cuota"><td>Cuota ${c.n}${c.numeroInferido ? ' (nº inferido)' : ''}</td>${celda(fmtMonto(c.capital), rv.capital)}${celda(fmtMonto(c.financiero), rv.financiero)}
-      <td></td><td></td><td>${c.pagada ? 'Pagada' : 'Impaga'}${c.estadoTxt ? ` <small>(${esc(c.estadoTxt)})</small>` : ''}</td><td>${esc(clasificarEjercicio(c))}</td>
-      <td>${c.pagada ? `<input type="date" data-plan="${esc(p.numero)}" data-cuota="${c.n}" value="${esc(c.fechaPagoReal || '')}" aria-label="Fecha real de pago cuota ${c.n}">` : ''}</td></tr>`;
-    for (const f of c.filas) {
-      html += `<tr class="fila${f.pago ? ' pago' : ''}"><td>${esc(fmtFecha(f.venc))}${f.pago ? ' ← <b>Pago</b>' : ''}</td>
-        ${celda(fmtMonto(f.capital), f.revisar.capital)}${celda(fmtMonto(f.financiero), f.revisar.financiero)}${celda(f.resarcitorio == null ? '?' : fmtMonto(f.resarcitorio), f.revisar.resarcitorio)}
-        <td class="n${f.revisar.total ? ' rev' : ''}${f.errorSuma ? ' rojo' : ''}">${f.total == null ? '?' : fmtMonto(f.total)}</td><td colspan="3">${f.revisar.venc ? '<span class="bad av">revisar fecha</span>' : ''}</td></tr>`;
-    }
+    const rv = c.revisar || {}; const mn = c.manual || {};
+    const estSel = c.estadoManual === undefined ? '' : c.estadoManual;
+    html += `<tr class="cuota"><td>Cuota ${c.n}${c.numeroInferido ? ' (nº inferido)' : ''}</td>
+      ${celdaMonto(c.capital, { rev: rv.capital, man: mn.capital, campo: 'capital', cuota: c.n })}${celdaMonto(c.financiero, { rev: rv.financiero, man: mn.financiero, campo: 'financiero', cuota: c.n })}
+      <td></td><td></td>
+      <td>${c.pagada ? 'Pagada' : 'Impaga'}<br><select class="ed${c.estadoManual !== undefined ? ' man' : ''}" data-campo="estado" data-cuota="${c.n}" aria-label="Estado de la cuota ${c.n}">
+        <option value="" ${estSel === '' ? 'selected' : ''}>según lectura${c.estadoManual === undefined && c.estadoTxt ? ` (${esc(c.estadoTxt)})` : ''}</option>
+        <option value="Cuota Cancelada" ${estSel === 'Cuota Cancelada' ? 'selected' : ''}>Cuota Cancelada</option>
+        <option value="Cuota Impaga" ${estSel === 'Cuota Impaga' ? 'selected' : ''}>Cuota Impaga</option></select></td>
+      <td>${esc(clasificarEjercicio(c))}</td>
+      <td>${c.pagada ? `<input type="date" data-fpr="1" data-plan="${esc(p.numero)}" data-cuota="${c.n}" value="${esc(c.fechaPagoReal || '')}" aria-label="Fecha real de pago cuota ${c.n}">` : ''}</td></tr>`;
+    c.filas.forEach((f, i) => {
+      const fm = f.manual || {};
+      html += `<tr class="fila${f.pago ? ' pago' : ''}"><td><input class="ed${fm.venc ? ' man' : f.revisar.venc ? ' rev' : ''}" type="date" data-campo="venc" data-cuota="${c.n}" data-fila="${i}" value="${esc(f.venc || '')}" aria-label="Vencimiento">
+        <label class="chk"><input type="checkbox" data-campo="pago" data-cuota="${c.n}" data-fila="${i}" ${f.pago ? 'checked' : ''}> <b>Pago</b></label></td>
+        ${cel(fmtMonto(f.capital), f.revisar.capital)}${cel(fmtMonto(f.financiero), f.revisar.financiero)}
+        ${celdaMonto(f.resarcitorio, { rev: f.revisar.resarcitorio, man: fm.resarcitorio, campo: 'resarcitorio', cuota: c.n, fila: i })}
+        ${celdaMonto(f.total, { rev: f.revisar.total, man: fm.total, campo: 'total', cuota: c.n, fila: i }).replace('class="n', `class="n${f.errorSuma ? ' rojo' : ''}`)}
+        <td colspan="3"></td></tr>`;
+    });
   }
   html += '</tbody></table></div>';
+  if (p.correcciones?.length) {
+    html += `<h3>Correcciones manuales (${p.correcciones.length})</h3><ul class="alertas corr">${p.correcciones.map((x, i) =>
+      `<li><b>${esc(x.etiqueta)}</b>: ${esc(x.textoOriginal)} → <b>${esc(x.textoActual)}</b> ${x.campo === 'pago' ? '' : `<button data-restaurar="${i}" type="button">Restaurar lo leído</button>`}</li>`).join('')}</ul>`;
+  }
   cont.innerHTML = html;
-  cont.querySelectorAll('input[type=date]').forEach((inp) => inp.addEventListener('change', () => {
+  cont.querySelectorAll('input[data-fpr]').forEach((inp) => inp.addEventListener('change', () => {
     const pl = planes.find((x) => x.numero === inp.dataset.plan);
     const c = pl.cuotas.find((x) => x.n === Number(inp.dataset.cuota));
     c.fechaPagoReal = inp.value || null;
   }));
 }
+
+// Edición a mano: un solo listener para todas las celdas editables del detalle.
+$('#detalle').addEventListener('change', (e) => {
+  const t = e.target; const campo = t.dataset?.campo;
+  if (!campo) return;
+  const p = planes.find((x) => x.numero === seleccionado); if (!p) return;
+  let valor;
+  if (t.type === 'checkbox') valor = t.checked;
+  else if (campo === 'venc') valor = t.value || null;
+  else if (campo === 'estado') valor = t.value || null;
+  else {
+    const txt = t.value.trim();
+    if (txt === '') valor = null;
+    else {
+      valor = leerMontoUsuario(txt);
+      if (valor == null) { t.classList.add('invalido'); t.title = 'Importe no válido. Usá el formato 1.234,56'; return; }
+    }
+  }
+  const cuota = t.dataset.cuota != null ? Number(t.dataset.cuota) : undefined;
+  const fila = t.dataset.fila != null ? Number(t.dataset.fila) : undefined;
+  try { corregirCampo(p, { cuota, fila, campo, valor }); } catch (err) { alert(err.message); }
+  dibujar();
+});
+$('#detalle').addEventListener('click', (e) => {
+  const i = e.target.dataset?.restaurar; if (i == null) return;
+  const p = planes.find((x) => x.numero === seleccionado); const r = p?.correcciones[Number(i)]; if (!r) return;
+  corregirCampo(p, { cuota: r.cuota ?? undefined, fila: r.fila ?? undefined, campo: r.campo, valor: r.campo === 'estado' ? null : r.original });
+  dibujar();
+});
 $('#solo-criticas').addEventListener('change', dibujar);
 
 // ---------- exportar ----------

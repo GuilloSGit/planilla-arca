@@ -87,7 +87,7 @@ function clasificar(texto) {
   if (ns) return { tipo: 'monto', valor: aCentavos(ns), corregido: true };
   if (t === '-' || t === '—' || t === '–') return { tipo: 'guion' };
   if (/^\d{1,3}$/.test(t)) return { tipo: 'entero', valor: Number(t) };
-  if (/^[\d.,]{3,}$/.test(t) && /\d[.,]/.test(t)) return { tipo: 'montoMalo', texto: t }; // parece importe pero no se pudo leer
+  if (/^[\d.,#*_~'"|`]{3,}$/.test(t) && /\d[.,#*_~'"|`]|[.,]\d/.test(t) && /\d/.test(t) && /[.,]/.test(t)) return { tipo: 'montoMalo', texto: t }; // parece importe pero no se pudo leer
   if (/^pag[o0]\.?$/i.test(t)) return { tipo: 'pago' };
   return { tipo: 'texto', texto: t };
 }
@@ -300,89 +300,61 @@ function armarCuotas(rep, filas, umbral, alerta) {
     const al = (nivel, codigo, msg) => { const a = { nivel, codigo, texto: msg, cuota: g.n }; c.alertas.push(a); rep.alertas.push(a); };
     const bajo = (x) => x && (x.corregido || x.ilegible || x.conf < umbral);
 
+    c.base = { capital: false, financiero: false };
     for (const f of g.filas) {
       // capital / financiero: deben ser iguales en todas las filas de la cuota
       if (f.cap != null) {
-        if (c.capital == null) { c.capital = f.cap; if (bajo(f.confImp.capital)) c.revisar.capital = true; }
-        else if (c.capital !== f.cap) { al('critica', 'capital-distinto', `Cuota ${g.n}: el capital cambia entre filas (${fmtMonto(c.capital)} vs ${fmtMonto(f.cap)}).`); c.revisar.capital = true; }
-      } else if (f.conCapital) c.revisar.capital = true;
+        if (c.capital == null) { c.capital = f.cap; if (bajo(f.confImp.capital)) c.base.capital = true; }
+        else if (c.capital !== f.cap) { al('critica', 'capital-distinto', `Cuota ${g.n}: el capital cambia entre filas (${fmtMonto(c.capital)} vs ${fmtMonto(f.cap)}).`); c.base.capital = true; }
+      } else if (f.conCapital) c.base.capital = true;
       if (f.fin != null) {
-        if (c.financiero == null) { c.financiero = f.fin; if (bajo(f.confImp.financiero)) c.revisar.financiero = true; }
-        else if (c.financiero !== f.fin) { al('critica', 'financiero-distinto', `Cuota ${g.n}: el interés financiero cambia entre filas (${fmtMonto(c.financiero)} vs ${fmtMonto(f.fin)}).`); c.revisar.financiero = true; }
-      } else c.revisar.financiero = true;
+        if (c.financiero == null) { c.financiero = f.fin; if (bajo(f.confImp.financiero)) c.base.financiero = true; }
+        else if (c.financiero !== f.fin) { al('critica', 'financiero-distinto', `Cuota ${g.n}: el interés financiero cambia entre filas (${fmtMonto(c.financiero)} vs ${fmtMonto(f.fin)}).`); c.base.financiero = true; }
+      } else c.base.financiero = true;
 
-      const fila = {
-        venc: f.venc, capital: f.cap ?? c.capital, financiero: f.fin ?? c.financiero, resarcitorio: f.res, total: f.tot,
-        pago: f.pago, estadoTxt: f.estadoTxt, lineaOCR: f.lineaOCR,
-        revisar: {
-          resarcitorio: !!bajo(f.confImp.resarcitorio) || f.res == null,
-          total: !!bajo(f.confImp.total) || f.tot == null,
-          capital: f.cap != null && !!bajo(f.confImp.capital),
-          financiero: f.fin != null && !!bajo(f.confImp.financiero),
+      c.filas.push({
+        venc: f.venc, capital: f.cap, financiero: f.fin, resarcitorio: f.res, total: f.tot,
+        pago: f.pago, estadoTxt: f.estadoTxt, lineaOCR: f.lineaOCR, incompleta: !!f.incompleta,
+        base: {
+          resarcitorio: !!bajo(f.confImp.resarcitorio), total: !!bajo(f.confImp.total),
+          capital: f.cap != null && !!bajo(f.confImp.capital), financiero: f.fin != null && !!bajo(f.confImp.financiero),
           venc: f.vencConf < umbral || f.vencCorregido,
         },
-      };
-      // control Total = Capital + Financiero + Resarcitorio
-      if (fila.capital != null && fila.financiero != null && fila.resarcitorio != null && fila.total != null) {
-        const esperado = fila.capital + fila.financiero + fila.resarcitorio;
-        if (esperado !== fila.total) {
-          fila.errorSuma = fila.total - esperado;
-          fila.revisar.total = true;
-          al('critica', 'total-no-cierra', `Cuota ${g.n}, venc. ${fmtFecha(fila.venc)}: Total ${fmtMonto(fila.total)} ≠ Capital + Financiero + Resarcitorio ${fmtMonto(esperado)} (dif. ${fmtMonto(fila.total - esperado)}).`);
-        }
-      }
-      c.filas.push(fila);
+        manual: {},
+      });
     }
-
-    // estado
-    const estados = new Set(c.filas.map((x) => x.estadoTxt).filter(Boolean));
-    if (estados.size > 1) al('critica', 'estado-contradictorio', `Cuota ${g.n}: aparecen estados contradictorios (${[...estados].join(' / ')}).`);
-    c.estadoTxt = estados.has('Cuota Cancelada') ? 'Cuota Cancelada' : estados.has('Cuota Impaga') ? 'Cuota Impaga' : null;
-
-    const filasPago = c.filas.filter((x) => x.pago);
-    if (filasPago.length > 1) al('critica', 'varios-pagos', `Cuota ${g.n}: hay ${filasPago.length} filas marcadas «Pago». Se usa la última.`);
-    const fp = filasPago[filasPago.length - 1] || null;
-    c.pagada = !!fp || c.estadoTxt === 'Cuota Cancelada';
-    if (fp && c.estadoTxt === 'Cuota Impaga') al('critica', 'pago-e-impaga', `Cuota ${g.n}: tiene fila «Pago» pero el estado dice «Cuota Impaga».`);
-    if (c.pagada) {
-      if (fp) {
-        c.vencPago = fp.venc; c.resPagado = fp.resarcitorio; c.filaPago = fp;
-        if (fp.revisar.venc) c.revisar.vencPago = true;
-        if (fp.revisar.resarcitorio) c.revisar.resPagado = true;
-        if (c.capital != null && c.financiero != null && fp.resarcitorio != null) c.totalPagado = c.capital + c.financiero + fp.resarcitorio;
-        if (fp.resarcitorio == null) al('critica', 'pago-sin-resarcitorio', `Cuota ${g.n}: no se pudo leer el resarcitorio de la fila de pago.`);
-      } else {
-        al('critica', 'cancelada-sin-pago', `Cuota ${g.n}: figura «Cuota Cancelada» pero ninguna fila quedó marcada «Pago». Fecha y resarcitorio pagados quedan en blanco para revisar.`);
-        c.revisar.vencPago = true; c.revisar.resPagado = true;
-      }
-    } else {
-      // pendiente: resarcitorio del último vencimiento <= cierre
-      const cand = c.filas.filter((x) => x.venc && x.venc <= EJERCICIO.hasta);
-      if (cand.length) {
-        cand.sort((a, b) => (a.venc < b.venc ? -1 : a.venc > b.venc ? 1 : 0));
-        const ult = cand[cand.length - 1];
-        c.resPendiente = ult.resarcitorio ?? 0;
-        if (ult.resarcitorio == null) { c.revisar.resPendiente = true; al('critica', 'pend-sin-resarcitorio', `Cuota ${g.n}: no se pudo leer el resarcitorio pendiente.`); }
-        else if (ult.revisar.resarcitorio) c.revisar.resPendiente = true;
-      }
-    }
-    if (c.capital == null) al('critica', 'sin-capital', `Cuota ${g.n}: no se pudo leer el capital.`);
-    if (c.financiero == null) al('critica', 'sin-financiero', `Cuota ${g.n}: no se pudo leer el interés financiero.`);
+    evaluarCuota(c, al);
     rep.cuotas.push(c);
   }
 }
 
 function armarPie(rep, pie, umbral, alerta) {
+  if (pie) {
+    const m = pie.montos;
+    rep.pie = {
+      capital: m[0] ?? null, financiero: m[1] ?? null, resarcitorio: m[2] ?? null, total: m[3] ?? null,
+      bajaBase: pie.conf.some((c) => c < umbral), manual: {}, lineaOCR: pie.lineaOCR, leidos: m.filter((x) => x != null).length,
+    };
+  }
+  evaluarPie(rep, alerta);
+}
+
+/** Valida el pie del reporte (también se usa al corregir a mano). */
+function evaluarPie(plan, alerta) {
+  const pie = plan.pie;
   if (!pie) { alerta('critica', 'sin-pie', 'No se encontró la fila «Total Pagado» del pie del reporte: no se puede controlar la suma.'); return; }
-  const m = pie.montos;
-  if (m.length !== 4 || m.some((x) => x == null)) {
-    alerta('critica', 'pie-incompleto', `No se pudieron leer los 4 importes del pie (se leyeron ${m.filter((x) => x != null).length}): «${pie.lineaOCR}»`);
-    rep.pie = { capital: m[0] ?? null, financiero: m[1] ?? null, resarcitorio: m[2] ?? null, total: m[3] ?? null, incompleto: true };
+  const k4 = ['capital', 'financiero', 'resarcitorio', 'total'];
+  const faltan = k4.filter((k) => pie[k] == null);
+  pie.incompleto = faltan.length > 0;
+  pie.manual ||= {};
+  pie.revisar = Object.fromEntries(k4.map((k) => [k, (!!pie.bajaBase && !pie.manual[k]) || pie[k] == null]));
+  pie.baja = Object.values(pie.revisar).some(Boolean);
+  if (pie.incompleto) {
+    alerta('critica', 'pie-incompleto', `No se pudieron leer los 4 importes del pie (se leyeron ${4 - faltan.length}${pie.lineaOCR ? `: «${pie.lineaOCR}»` : ''}). Falta: ${faltan.join(', ')}.`);
     return;
   }
-  rep.pie = { capital: m[0], financiero: m[1], resarcitorio: m[2], total: m[3], baja: pie.conf.some((c) => c < umbral) };
-  if (m[0] + m[1] + m[2] !== m[3]) {
-    alerta('critica', 'pie-no-cierra', `El pie no cierra: capital + financiero + resarcitorio = ${fmtMonto(m[0] + m[1] + m[2])} pero el total del pie es ${fmtMonto(m[3])}.`);
+  if (pie.capital + pie.financiero + pie.resarcitorio !== pie.total) {
+    alerta('critica', 'pie-no-cierra', `El pie no cierra: capital + financiero + resarcitorio = ${fmtMonto(pie.capital + pie.financiero + pie.resarcitorio)} pero el total del pie es ${fmtMonto(pie.total)}.`);
   }
 }
 
@@ -412,11 +384,161 @@ function controlarPlan(rep, alerta) {
   for (let i = 1; i <= max; i++) if (!ns.includes(i)) alerta('critica', 'falta-cuota', `Falta la cuota ${i} en la secuencia (¿el OCR la omitió?).`, { cuota: i });
   const dup = ns.filter((n, i) => ns.indexOf(n) !== i);
   for (const d of new Set(dup)) alerta('critica', 'cuota-repetida', `La cuota ${d} aparece más de una vez como grupo separado.`, { cuota: d });
-  const d = diferenciaConPie(rep.cuotas, rep.pie);
+  controlesPagos(rep, alerta);
+}
+
+/** Suma de cuotas pagas contra el pie. */
+function controlesPagos(plan, alerta) {
+  const d = diferenciaConPie(plan.cuotas, plan.pie);
   if (d && (d.capital || d.financiero || d.resarcitorio || d.total)) {
     alerta('critica', 'dif-pie', `La suma de las cuotas pagas no coincide con el pie: capital ${fmtMonto(d.capital)}, financiero ${fmtMonto(d.financiero)}, resarcitorio ${fmtMonto(d.resarcitorio)}, total ${fmtMonto(d.total)} (suma − pie).`, { diferencia: d });
   }
-  if (!totalesPagos(rep.cuotas).completo) alerta('critica', 'pagas-incompletas', 'Hay cuotas pagas con datos ilegibles: la suma contra el pie no es confiable.');
+  if (!totalesPagos(plan.cuotas).completo) alerta('critica', 'pagas-incompletas', 'Hay cuotas pagas con datos ilegibles: la suma contra el pie no es confiable.');
+}
+
+// ---------- evaluación de una cuota (inicial y tras correcciones manuales) ----------
+const CODIGOS_DATOS = new Set(['total-no-cierra', 'total-ilegible', 'cancelada-sin-pago', 'varios-pagos', 'pago-e-impaga', 'pago-sin-resarcitorio',
+  'pend-sin-resarcitorio', 'estado-contradictorio', 'sin-capital', 'sin-financiero', 'sin-pie', 'pie-incompleto', 'pie-no-cierra', 'dif-pie', 'pagas-incompletas']);
+
+/** Recalcula todo lo derivado de una cuota a partir de sus filas y de lo editado a mano. */
+export function evaluarCuota(c, al) {
+  c.manual ||= {}; c.base ||= {};
+  c.revisar = {};
+  c.vencPago = null; c.resPagado = null; c.totalPagado = null; c.resPendiente = 0; c.filaPago = undefined;
+  if ((c.base.capital && !c.manual.capital) || c.capital == null) c.revisar.capital = true;
+  if ((c.base.financiero && !c.manual.financiero) || c.financiero == null) c.revisar.financiero = true;
+
+  for (const f of c.filas) {
+    f.capital = c.capital; f.financiero = c.financiero;
+    f.manual ||= {}; const b = f.base || {};
+    f.revisar = {
+      resarcitorio: (!!b.resarcitorio && !f.manual.resarcitorio) || f.resarcitorio == null,
+      total: (!!b.total && !f.manual.total) || f.total == null,
+      capital: !!b.capital && !c.manual.capital, financiero: !!b.financiero && !c.manual.financiero,
+      venc: !!b.venc && !f.manual.venc,
+    };
+    f.errorSuma = undefined;
+    if (f.total == null) al('critica', 'total-ilegible', `Cuota ${c.n}, venc. ${fmtFecha(f.venc)}: no se pudo leer el total de la fila, no se puede verificar que cierre.`);
+    if (f.capital != null && f.financiero != null && f.resarcitorio != null && f.total != null) {
+      const esperado = f.capital + f.financiero + f.resarcitorio;
+      if (esperado !== f.total) {
+        f.errorSuma = f.total - esperado; f.revisar.total = true;
+        al('critica', 'total-no-cierra', `Cuota ${c.n}, venc. ${fmtFecha(f.venc)}: Total ${fmtMonto(f.total)} ≠ Capital + Financiero + Resarcitorio ${fmtMonto(esperado)} (dif. ${fmtMonto(f.total - esperado)}).`);
+      }
+    }
+  }
+
+  // estado
+  if (c.estadoManual !== undefined) c.estadoTxt = c.estadoManual;
+  else {
+    const estados = new Set(c.filas.map((x) => x.estadoTxt).filter(Boolean));
+    if (estados.size > 1) al('critica', 'estado-contradictorio', `Cuota ${c.n}: aparecen estados contradictorios (${[...estados].join(' / ')}).`);
+    c.estadoTxt = estados.has('Cuota Cancelada') ? 'Cuota Cancelada' : estados.has('Cuota Impaga') ? 'Cuota Impaga' : null;
+  }
+
+  const filasPago = c.filas.filter((x) => x.pago);
+  if (filasPago.length > 1) al('critica', 'varios-pagos', `Cuota ${c.n}: hay ${filasPago.length} filas marcadas «Pago». Se usa la última.`);
+  const fp = filasPago[filasPago.length - 1] || null;
+  c.pagada = !!fp || c.estadoTxt === 'Cuota Cancelada';
+  if (fp && c.estadoTxt === 'Cuota Impaga') al('critica', 'pago-e-impaga', `Cuota ${c.n}: tiene fila «Pago» pero el estado dice «Cuota Impaga».`);
+  if (c.pagada) {
+    if (fp) {
+      c.vencPago = fp.venc; c.resPagado = fp.resarcitorio; c.filaPago = fp;
+      if (fp.revisar.venc || fp.venc == null) c.revisar.vencPago = true;
+      if (fp.revisar.resarcitorio) c.revisar.resPagado = true;
+      if (c.capital != null && c.financiero != null && fp.resarcitorio != null) c.totalPagado = c.capital + c.financiero + fp.resarcitorio;
+      if (fp.resarcitorio == null) al('critica', 'pago-sin-resarcitorio', `Cuota ${c.n}: no se pudo leer el resarcitorio de la fila de pago.`);
+    } else {
+      al('critica', 'cancelada-sin-pago', `Cuota ${c.n}: figura «Cuota Cancelada» pero ninguna fila quedó marcada «Pago». Fecha y resarcitorio pagados quedan en blanco para revisar.`);
+      c.revisar.vencPago = true; c.revisar.resPagado = true;
+    }
+  } else {
+    // pendiente: resarcitorio del último vencimiento <= cierre
+    const cand = c.filas.filter((x) => x.venc && x.venc <= EJERCICIO.hasta);
+    if (cand.length) {
+      cand.sort((a, b) => (a.venc < b.venc ? -1 : a.venc > b.venc ? 1 : 0));
+      const ult = cand[cand.length - 1];
+      c.resPendiente = ult.resarcitorio ?? 0;
+      if (ult.resarcitorio == null) { c.revisar.resPendiente = true; al('critica', 'pend-sin-resarcitorio', `Cuota ${c.n}: no se pudo leer el resarcitorio pendiente.`); }
+      else if (ult.revisar.resarcitorio) c.revisar.resPendiente = true;
+    }
+  }
+  if (c.capital == null) al('critica', 'sin-capital', `Cuota ${c.n}: no se pudo leer el capital.`);
+  if (c.financiero == null) al('critica', 'sin-financiero', `Cuota ${c.n}: no se pudo leer el interés financiero.`);
+}
+
+/** Recalcula las alertas de datos de un plan (después de editar a mano). Las demás (archivo, versiones…) no se tocan. */
+export function revalidarPlan(plan) {
+  if (plan.tipo !== 'cuotas') return plan;
+  plan.alertas = plan.alertas.filter((a) => !CODIGOS_DATOS.has(a.codigo));
+  const alP = (nivel, codigo, texto, extra = {}) => plan.alertas.push({ nivel, codigo, texto, ...extra });
+  for (const c of plan.cuotas) {
+    c.alertas = (c.alertas || []).filter((a) => !CODIGOS_DATOS.has(a.codigo));
+    evaluarCuota(c, (nivel, codigo, texto) => { const a = { nivel, codigo, texto, cuota: c.n }; c.alertas.push(a); plan.alertas.push(a); });
+  }
+  evaluarPie(plan, alP);
+  controlesPagos(plan, alP);
+  return plan;
+}
+
+const ETIQUETA = { capital: 'Capital', financiero: 'Interés financiero', resarcitorio: 'Resarcitorio', total: 'Total', venc: 'Fecha de vencimiento', pago: 'Fila «Pago»', estado: 'Estado de la cuota' };
+const ETIQ_PIE = { capital: 'Pie: capital', financiero: 'Pie: interés financiero', resarcitorio: 'Pie: resarcitorio', total: 'Pie: total pagado' };
+
+function textoValor(campo, v) {
+  if (v == null || v === '') return '(en blanco)';
+  if (campo === 'venc') return fmtFecha(v);
+  if (campo === 'pago') return v ? 'marcada' : 'sin marcar';
+  if (campo === 'estado') return v;
+  return fmtMonto(v);
+}
+
+/**
+ * Corrige a mano un dato leído por OCR y recalcula las alertas. NO oculta inconsistencias:
+ * si lo que se escribe no cierra, la alerta sigue.
+ * cambio: { cuota, fila (índice), campo: capital|financiero|resarcitorio|total|venc|pago|estado|pie:<k>, valor }
+ */
+export function corregirCampo(plan, { cuota, fila, campo, valor }) {
+  if (plan.tipo !== 'cuotas') throw new Error('Solo se corrigen planes con cuotas');
+  plan.correcciones ||= [];
+  const esPie = campo.startsWith('pie:');
+  const c = esPie ? null : plan.cuotas.find((x) => x.n === cuota);
+  if (!esPie && !c) throw new Error(`No existe la cuota ${cuota}`);
+  const f = c && fila != null ? c.filas[fila] : null;
+  let antes; let etiqueta; let clave;
+
+  if (esPie) {
+    const k = campo.slice(4);
+    plan.pie ||= { capital: null, financiero: null, resarcitorio: null, total: null, bajaBase: false, manual: {} };
+    antes = plan.pie[k]; plan.pie[k] = valor; plan.pie.manual ||= {}; plan.pie.manual[k] = valor != null;
+    etiqueta = ETIQ_PIE[k]; clave = `pie|${k}`;
+  } else if (campo === 'capital' || campo === 'financiero') {
+    antes = c[campo]; c[campo] = valor; c.manual[campo] = valor != null;
+    const cod = campo === 'capital' ? 'capital-distinto' : 'financiero-distinto';
+    plan.alertas = plan.alertas.filter((a) => !(a.codigo === cod && a.cuota === c.n));
+    etiqueta = `Cuota ${c.n} — ${ETIQUETA[campo]}`; clave = `${c.n}|${campo}`;
+  } else if (campo === 'estado') {
+    antes = c.estadoTxt; if (valor == null) delete c.estadoManual; else c.estadoManual = valor;
+    etiqueta = `Cuota ${c.n} — ${ETIQUETA.estado}`; clave = `${c.n}|estado`;
+  } else if (['resarcitorio', 'total', 'venc', 'pago'].includes(campo)) {
+    if (!f) throw new Error('Falta la fila');
+    antes = f[campo];
+    if (campo === 'pago' && valor) c.filas.forEach((x) => { x.pago = false; });
+    f[campo] = valor; f.manual ||= {}; f.manual[campo] = campo === 'pago' ? true : valor != null;
+    if (campo === 'resarcitorio' && f.incompleta && valor != null) {
+      f.incompleta = false; plan.alertas = plan.alertas.filter((a) => !(a.codigo === 'fila-incompleta' && a.cuota === c.n));
+    }
+    etiqueta = `Cuota ${c.n}, fila ${f.venc ? fmtFecha(f.venc) : fila + 1} — ${ETIQUETA[campo]}`;
+    clave = `${c.n}|${fila}|${campo}`;
+  } else throw new Error(`Campo desconocido: ${campo}`);
+
+  // registro: se conserva el valor ORIGINAL leído por el OCR
+  let reg = plan.correcciones.find((x) => x.clave === clave);
+  if (!reg) { reg = { clave, etiqueta, campo, cuota: c?.n ?? null, fila: fila ?? null, original: antes, actual: valor }; plan.correcciones.push(reg); }
+  reg.actual = valor;
+  reg.textoOriginal = textoValor(campo.replace('pie:', ''), reg.original); reg.textoActual = textoValor(campo.replace('pie:', ''), valor);
+  if (reg.original === reg.actual || (campo === 'estado' && valor == null)) plan.correcciones.splice(plan.correcciones.indexOf(reg), 1);
+
+  return revalidarPlan(plan);
 }
 
 function parseObligaciones(rep, lineas, texto) {
@@ -488,8 +610,10 @@ export function consolidar(items) {
       numero, tipo: r.tipo, estado: caducos.length ? 'Caduco (según archivo)' : 'Sin marca de caducidad en el archivo',
       caduco: !!caducos.length, archivo: elegido.archivo, version: r.nombre.sufijo, cuit: r.cuit, consolidacion: r.consolidacion,
       cuotas: r.cuotas, pie: r.pie, saldoObligaciones: r.saldoObligaciones,
+      correcciones: (r.correcciones ||= []),   // compartido con el reporte: se guarda junto con él
       archivos: lista.map((l) => l.archivo), alertas,
     });
+    if (r.correcciones.length) revalidarPlan(planes[planes.length - 1]);
   }
   planes.sort((a, b) => a.numero.localeCompare(b.numero));
   return planes;
